@@ -12,12 +12,24 @@ mkdir -p "${DIST}"
 
 if [[ ! -d "${WORK}/.git" ]]; then
   echo ">> cloning sitehub-dk/sandbox-engine into ${WORK}" >&2
-  gh repo clone sitehub-dk/sandbox-engine "${WORK}" -- --no-checkout --filter=blob:none >&2
+  # Prefer GH_TOKEN (headless/CI path) over gh CLI's keyring-backed config.
+  if [[ -n "${GH_TOKEN:-}" ]]; then
+    git -c "http.extraHeader=Authorization: Bearer ${GH_TOKEN}" \
+      clone --no-checkout --filter=blob:none \
+      https://github.com/sitehub-dk/sandbox-engine.git "${WORK}" >&2
+  else
+    gh repo clone sitehub-dk/sandbox-engine "${WORK}" -- --no-checkout --filter=blob:none >&2
+  fi
+fi
+
+GIT_EXTRA_HDR=()
+if [[ -n "${GH_TOKEN:-}" ]]; then
+  GIT_EXTRA_HDR=(-c "http.extraHeader=Authorization: Bearer ${GH_TOKEN}")
 fi
 
 (
   cd "${WORK}"
-  git fetch --all --quiet
+  git "${GIT_EXTRA_HDR[@]}" fetch --all --quiet
   git checkout --detach "${AGENT_REF}" >&2
 )
 
