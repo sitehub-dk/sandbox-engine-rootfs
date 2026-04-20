@@ -1,0 +1,106 @@
+# Workflow security review (2026-04-20):
+#   - No untrusted github.event.* inputs used anywhere.
+#   - secrets.SANDBOX_ENGINE_READ_TOKEN is a scoped PAT for cloning the private agent repo.
+#   - GITHUB_REF_NAME is the runner-provided env var (not the github.ref_name expression) — safe in shell.
+#   - Matrix keys are hard-coded below; no user-supplied strings reach shell.
+name: build-rootfs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    outputs:
+      agent_ref: ${{ steps.ref.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve AGENT_REF
+        id: ref
+        run: |
+          agent_ref=$(awk -F'?= *' '/^AGENT_REF/ {print $2; exit}' Makefile | tr -d '[:space:]')
+          echo "ref=${agent_ref}" >> "$GITHUB_OUTPUT"
+          echo "pinned AGENT_REF=${agent_ref}"
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Build sandbox-agent
+        env:
+          AGENT_REF: ${{ steps.ref.outputs.ref }}
+          GH_TOKEN: ${{ secrets.SANDBOX_ENGINE_READ_TOKEN }}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "SANDBOX_ENGINE_READ_TOKEN missing — cannot clone private sandbox-engine"
+            echo "Add a PAT with repo:read to the sandbox-engine-rootfs repo secrets to enable agent builds."
+            exit 1
+          fi
+          gh auth status
+          make agent
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-agent
+          path: dist/sandbox-agent
+          if-no-files-found: error
+
+  image:
+    needs: agent
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        key: [ruby33, rust185, java21, php83, elixir17, browser]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: sandbox-agent
+          path: dist
+      - name: Restore sandbox-agent permissions
+        run: chmod +x dist/sandbox-agent && file dist/sandbox-agent
+      - name: Install e2fsprogs
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends e2fsprogs
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        env:
+          IMAGE_KEY: ${{ matrix.key }}
+        run: scripts/build-image.sh "$IMAGE_KEY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rootfs-${{ matrix.key }}
+          path: dist/rootfs-${{ matrix.key }}.ext4
+          if-no-files-found: error
+
+  release:
+    if: github.event_name == 'release'
+    needs: [agent, image]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-download
+      - name: Flatten artifact layout
+        run: |
+          mkdir -p dist
+          find dist-download -name '*.ext4' -exec mv {} dist/ \;
+          ls -la dist
+      - name: Generate manifest
+        env:
+          AGENT_REF: ${{ needs.agent.outputs.agent_ref }}
+        run: scripts/manifest.sh
+      - name: Attach release artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          gh release upload "$REF_NAME" dist/*.ext4 dist/manifest.json --clobber
