@@ -1,0 +1,11 @@
+[Unit]
+Description=sandbox-engine in-VM agent (vsock)
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/sandbox-agent
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
