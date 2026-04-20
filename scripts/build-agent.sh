@@ -10,26 +10,27 @@ WORK="${ROOT}/.build/sandbox-engine"
 
 mkdir -p "${DIST}"
 
+# Resolve a clone URL. If GH_TOKEN is set (headless/CI path) embed it inline
+# so git stops prompting for credentials. Otherwise rely on `gh` keyring.
+if [[ -n "${GH_TOKEN:-}" ]]; then
+  CLONE_URL="https://x-access-token:${GH_TOKEN}@github.com/sitehub-dk/sandbox-engine.git"
+else
+  CLONE_URL="https://github.com/sitehub-dk/sandbox-engine.git"
+fi
+
 if [[ ! -d "${WORK}/.git" ]]; then
   echo ">> cloning sitehub-dk/sandbox-engine into ${WORK}" >&2
-  # Prefer GH_TOKEN (headless/CI path) over gh CLI's keyring-backed config.
   if [[ -n "${GH_TOKEN:-}" ]]; then
-    git -c "http.extraHeader=Authorization: Bearer ${GH_TOKEN}" \
-      clone --no-checkout --filter=blob:none \
-      https://github.com/sitehub-dk/sandbox-engine.git "${WORK}" >&2
+    git clone --no-checkout --filter=blob:none "${CLONE_URL}" "${WORK}" >&2
   else
     gh repo clone sitehub-dk/sandbox-engine "${WORK}" -- --no-checkout --filter=blob:none >&2
   fi
 fi
 
-GIT_EXTRA_HDR=()
-if [[ -n "${GH_TOKEN:-}" ]]; then
-  GIT_EXTRA_HDR=(-c "http.extraHeader=Authorization: Bearer ${GH_TOKEN}")
-fi
-
 (
   cd "${WORK}"
-  git "${GIT_EXTRA_HDR[@]}" fetch --all --quiet
+  # Keep the tokenized URL ephemeral — set the remote for this fetch only.
+  git -c "remote.origin.url=${CLONE_URL}" fetch --all --quiet
   git checkout --detach "${AGENT_REF}" >&2
 )
 
