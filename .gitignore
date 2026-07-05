@@ -1,2 +1,11 @@
 dist/
 .DS_Store
+
+# Environment
+.env
+
+# Dependencies
+node_modules/
+
+# Python bytecode
+__pycache__/
